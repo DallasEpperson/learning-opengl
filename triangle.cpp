@@ -8,39 +8,93 @@ using namespace std;
 GLuint program;
 GLint attribute_coord2d;
 
+/**
+ * Load a file as string
+ * 
+ * @param filename Location of file on file system
+ */
+char* file_read(const char* filename) {
+    SDL_RWops *readWrite = SDL_RWFromFile(filename, "rb"); // see https://wiki.libsdl.org/SDL_RWFromFile#Remarks
+    if (readWrite == NULL) return NULL;
+
+    Sint64 dataStreamSize = SDL_RWsize(readWrite);
+    char* res = (char*)malloc(dataStreamSize + 1);
+
+    Sint64 nb_read_total = 0, nb_read = 1;
+    char* buf = res;
+    while (nb_read_total < dataStreamSize && nb_read != 0) {
+        nb_read = SDL_RWread(readWrite, buf, 1, (dataStreamSize - nb_read_total));
+        nb_read_total += nb_read;
+        buf += nb_read;
+    }
+    SDL_RWclose(readWrite);
+    if (nb_read_total != dataStreamSize) {
+        free(res);
+        return NULL;
+    }
+    res[nb_read_total] = '\0';
+    return res;
+}
+
+void print_log(GLuint object) {
+    GLint log_length = 0;
+    if (glIsShader(object)) {
+        glGetShaderiv(object, GL_INFO_LOG_LENGTH, &log_length);
+    } else if (glIsProgram(object)) {
+        glGetProgramiv(object, GL_INFO_LOG_LENGTH, &log_length);
+    } else {
+        cerr << "printlog: Not a shader or a program" << endl;
+        return;
+    }
+
+    char* log = (char*)malloc(log_length);
+
+    if (glIsShader(object))
+        glGetShaderInfoLog(object, log_length, NULL, log);
+    else if (glIsProgram(object))
+        glGetProgramInfoLog(object, log_length, NULL, log);
+
+    cerr << log;
+    free(log);
+}
+
+GLuint create_shader(const char* filename, GLenum type) {
+    const GLchar* shaderCode = file_read(filename);
+    if (shaderCode == NULL) {
+        cerr << "Error opening " << filename << ": " << SDL_GetError() << endl;
+        return 0;
+    }
+    GLuint res = glCreateShader(type);
+    const GLchar* sources[] = {
+#ifdef GL_ES_VERSION_2_0
+        "#version 100\n"
+#else
+        "#version 120\n"
+#endif
+        ,
+        shaderCode
+    };
+    glShaderSource(res, 2, sources, NULL);
+    free((void*)shaderCode);
+    glCompileShader(res);
+    GLint compile_ok = GL_FALSE;
+    glGetShaderiv(res, GL_COMPILE_STATUS, &compile_ok);
+    if (compile_ok == GL_FALSE){
+        cerr << filename << ":";
+        print_log(res);
+        glDeleteShader(res);
+        return 0;
+    }
+    return res;
+}
+
 bool init_resources() {
-    GLint compile_ok = GL_FALSE, link_ok = GL_FALSE;
-
-    GLuint vs = glCreateShader(GL_VERTEX_SHADER);
-    const char *vs_source =
-        "#version 120\n"
-        "attribute vec2 coord2d;                  "
-        "void main(void) {                        "
-        "  gl_Position = vec4(coord2d, 0.0, 1.0); "
-        "}";
-    glShaderSource(vs, 1, &vs_source, NULL);
-    glCompileShader(vs);
-    glGetShaderiv(vs, GL_COMPILE_STATUS, &compile_ok);
-    if (!compile_ok) {
-        cerr << "Error in vertex shader" << endl;
+    GLuint vs, fs;
+    GLint link_ok;
+    if ((vs = create_shader("triangle.v.glsl", GL_VERTEX_SHADER)) == 0)
         return false;
-    }
-
-    GLuint fs = glCreateShader(GL_FRAGMENT_SHADER);
-    const char *fs_source =
-        "#version 120\n"
-        "void main(void) {        "
-        "  gl_FragColor[0] = 0.0; "
-        "  gl_FragColor[1] = 0.0; "
-        "  gl_FragColor[2] = 1.0; "
-        "}";
-    glShaderSource(fs, 1, &fs_source, NULL);
-    glCompileShader(fs);
-    glGetShaderiv(fs, GL_COMPILE_STATUS, &compile_ok);
-    if (!compile_ok) {
-        cerr << "Error in fragment shader" << endl;
+    if ((fs = create_shader("triangle.f.glsl", GL_FRAGMENT_SHADER)) == 0)
         return false;
-    }
 
     program = glCreateProgram();
     glAttachShader(program, vs);
@@ -48,7 +102,8 @@ bool init_resources() {
     glLinkProgram(program);
     glGetProgramiv(program, GL_LINK_STATUS, &link_ok);
     if (!link_ok) {
-        cerr << "Error in glLinkProgram" << endl;
+        cerr << "Error in glLinkProgram:";
+        print_log(program);
         return false;
     }
 
